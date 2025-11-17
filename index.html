@@ -1,498 +1,538 @@
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>نظام إدارة الامتحانات</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>إدارة الامتحانات / Exam Management System</title>
 
-    <!-- React + Tailwind (كما في النسخة السابقة) -->
+    <!-- React + Tailwind via CDN for simplicity -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
 
-    <!-- Firebase (compat) - نستخدم نسخة compat لتسهيل الكود -->
+    <!-- Firebase compat SDK (for browsers) -->
     <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
 
     <style>
-        * { 
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            -webkit-tap-highlight-color: transparent;
-        }
-        body {
-            overflow-x: hidden;
-        }
-        @media (max-width: 768px) {
-            .mobile-text-sm { font-size: 0.875rem; }
-            .mobile-p-3 { padding: 0.75rem; }
-        }
+        body { font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(180deg,#f7fbff 0%,#eef2ff 100%); }
+        [dir="rtl"] .text-left { text-align: left; }
+        .no-select { user-select: none; -webkit-user-select: none; -ms-user-select: none; }
     </style>
 </head>
 <body>
-    <div id="root"></div>
+<div id="root"></div>
 
-    <script type="text/babel">
-        const { useState, useEffect } = React;
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
 
-        // ----- أيقونات بسيطة -----
-        const Send = () => <span>📤</span>;
-        const Users = () => <span>👥</span>;
-        const Clock = () => <span>⏰</span>;
-        const AlertCircle = () => <span>⚠️</span>;
-        const CheckCircle = () => <span>✅</span>;
-        const Bell = () => <span>🔔</span>;
+/* ============================
+   Simple icons as emoji
+   ============================ */
+const Send = () => <span>📤</span>;
+const Trash = () => <span>🗑️</span>;
+const Bell = () => <span>🔔</span>;
+const Check = () => <span>✅</span>;
+const Cancel = () => <span>❌</span>;
+const Reply = () => <span>↩️</span>;
 
-        // ---------------------------
-        // إعداد Firebase — هنا تم استخدام الكود الذي أرسلتَه
-        // ---------------------------
-        const firebaseConfig = {
-          apiKey: "AIzaSyBF9s0UgAlbl2swjhjQX4wZ3SJXuQ1CccI",
-          authDomain: "examedara.firebaseapp.com",
-          projectId: "examedara",
-          storageBucket: "examedara.firebasestorage.app",
-          messagingSenderId: "1036021370726",
-          appId: "1:1036021370726:web:d56497f745f295fbdb02a7"
-        };
+/* ============================
+   Firebase initialization
+   ============================ */
+const firebaseConfig = {
+  apiKey: "AIzaSyBF9s0UgAlbl2swjhjQX4wZ3SJXuQ1CccI",
+  authDomain: "examedara.firebaseapp.com",
+  projectId: "examedara",
+  storageBucket: "examedara.firebasestorage.app",
+  messagingSenderId: "1036021370726",
+  appId: "1:1036021370726:web:d56497f745f295fbdb02a7"
+};
 
-        // Initialize Firebase (compat)
-        firebase.initializeApp(firebaseConfig);
-        const db = firebase.firestore();
+if (!firebase.apps.length) {
+  firebase.initializeApp(firebaseConfig);
+}
+const db = firebase.firestore();
 
-        // ---------------------------
-        // تطبيق React مع Firestore (real-time)
-        // ---------------------------
-        const ExamManagementSystem = () => {
-            const [mode, setMode] = useState('committee');
-            const [selectedCommittee, setSelectedCommittee] = useState(1);
-            const [reports, setReports] = useState([]);
-            const [studentsMap, setStudentsMap] = useState({}); // { committee_1: { absent:[], late:[], present:[] }, ... }
-            const [reportText, setReportText] = useState('');
-            const [studentName, setStudentName] = useState('');
-            const [playSound, setPlaySound] = useState(false);
-            const [audioInterval, setAudioInterval] = useState(null);
+/* ============================
+   Main App
+   ============================ */
+function App(){
+  const [mode, setMode] = useState('committee');
+  const [selectedCommittee, setSelectedCommittee] = useState(1);
+  const [reportText, setReportText] = useState('');
+  const [studentsInput, setStudentsInput] = useState('');
+  const [reports, setReports] = useState([]);
+  const [committeesData, setCommitteesData] = useState({});
+  const [settings, setSettings] = useState({ controlEnabled: false });
+  const [playSound, setPlaySound] = useState(false);
+  const audioCtxRef = useRef(null);
 
-            // استمع للتغييرات في مجموعة البلاغات (ترتيب زمني تنازلي)
-            useEffect(() => {
-                const q = db.collection('reports').orderBy('timestamp', 'desc');
-                const unsubscribe = q.onSnapshot(snapshot => {
-                    const arr = [];
-                    snapshot.forEach(doc => {
-                        arr.push({ id: doc.id, ...doc.data() });
-                    });
-                    setReports(arr);
-                }, err => {
-                    console.error('Firestore reports listener error:', err);
-                });
+  // Load settings
+  useEffect(() => {
+    const docRef = db.collection('settings').doc('app');
+    const unsub = docRef.onSnapshot(doc => {
+      if (doc.exists){
+        setSettings(doc.data());
+      } else {
+        docRef.set({ controlEnabled: false }).catch(()=>{});
+        setSettings({ controlEnabled: false });
+      }
+    }, err => console.error(err));
+    return () => unsub();
+  }, []);
 
-                return () => unsubscribe();
-            }, []);
+  // Listen to reports
+  useEffect(() => {
+    const q = db.collection('reports').orderBy('timestamp','desc');
+    const unsub = q.onSnapshot(snapshot => {
+      const arr = [];
+      snapshot.forEach(doc => arr.push({ id: doc.id, ...doc.data() }));
+      setReports(arr);
+    }, err => console.error(err));
+    return () => unsub();
+  }, []);
 
-            // استمع للتغييرات في مستندات اللجان
-            useEffect(() => {
-                const col = db.collection('committees');
-                const unsubscribe = col.onSnapshot(snapshot => {
-                    const map = {};
-                    snapshot.forEach(doc => {
-                        map[doc.id] = doc.data();
-                    });
-                    setStudentsMap(map);
-                }, err => {
-                    console.error('Firestore committees listener error:', err);
-                });
+  // Listen to committees docs (committee_1 .. committee_16)
+  useEffect(() => {
+    const coll = db.collection('committees');
+    const unsub = coll.onSnapshot(snapshot => {
+      const map = {};
+      snapshot.forEach(doc => {
+        map[doc.id] = doc.data();
+      });
+      setCommitteesData(map);
+    }, err => console.error(err));
+    return () => unsub();
+  }, []);
 
-                return () => unsubscribe();
-            }, []);
+  // Play sound when new unread reports and in control mode and control enabled
+  useEffect(() => {
+    const unread = reports.filter(r => !r.read && !r.cancelled).length;
+    if (unread > 0 && mode === 'control' && settings.controlEnabled){
+      setPlaySound(true);
+    } else {
+      setPlaySound(false);
+    }
+  }, [reports, mode, settings]);
 
-            // صوت التنبيه عند وجود بلاغ جديد — نراقب reports غير المقروءة
-            useEffect(() => {
-                const unreadCount = reports.filter(r => !r.read).length;
-                if (unreadCount > 0 && mode === 'control') {
-                    setPlaySound(true);
-                } else {
-                    setPlaySound(false);
-                }
-            }, [reports, mode]);
+  // WebAudio beep
+  useEffect(() => {
+    if (!playSound) return;
+    try {
+      if (!audioCtxRef.current) audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      const ctx = audioCtxRef.current;
+      const playBeep = () => {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = 'sine';
+        o.frequency.setValueAtTime(900, ctx.currentTime);
+        g.gain.setValueAtTime(0.001, ctx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.45);
+        o.connect(g);
+        g.connect(ctx.destination);
+        o.start();
+        o.stop(ctx.currentTime + 0.5);
+      };
+      playBeep();
+      const id = setInterval(playBeep, 3500);
+      return () => clearInterval(id);
+    } catch(e){
+      console.warn('Audio error', e);
+    }
+  }, [playSound]);
 
-            useEffect(() => {
-                if (playSound && mode === 'control') {
-                    const playAlertSound = () => {
-                        const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBTGH0fPTgjMGHm7A7+OZURE');
-                        audio.play().catch(() => {});
-                    };
-                    playAlertSound();
-                    const interval = setInterval(playAlertSound, 3000);
-                    setAudioInterval(interval);
-                    return () => { if (interval) clearInterval(interval); };
-                } else {
-                    if (audioInterval) {
-                        clearInterval(audioInterval);
-                        setAudioInterval(null);
-                    }
-                }
-            }, [playSound, mode]);
+  // Committee key
+  const key = `committee_${selectedCommittee}`;
+  const committeeDoc = committeesData[key] || { absent: [], present: [] };
 
-            // مساعدة: جلب بيانات لجنة معيّنة من studentsMap
-            const committeeKey = `committee_${selectedCommittee}`;
-            const committeeStudents = studentsMap[committeeKey] || { absent: [], late: [], present: [] };
+  /* ----------------------
+     Actions
+     ---------------------- */
 
-            // إرسال بلاغ → إضافة مستند جديد في مجموعة "reports"
-            const sendReport = async () => {
-                if (!reportText.trim()) {
-                    alert('الرجاء كتابة نص البلاغ');
-                    return;
-                }
-                try {
-                    await db.collection('reports').add({
-                        committee: selectedCommittee,
-                        text: reportText.trim(),
-                        read: false,
-                        timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-                        createdByClientTime: new Date().toLocaleString('ar-SA')
-                    });
-                    setReportText('');
-                    alert('تم إرسال البلاغ بنجاح');
-                } catch (err) {
-                    console.error('خطأ عند إرسال البلاغ:', err);
-                    alert('فشل إرسال البلاغ. راجع اتصال الإنترنت أو قم بتجربة ثانية.');
-                }
-            };
+  // Send a report (from committee)
+  const sendReport = async () => {
+    if (!reportText.trim()){
+      alert('الرجاء كتابة نص البلاغ / Please enter report text');
+      return;
+    }
+    try {
+      await db.collection('reports').add({
+        committee: selectedCommittee,
+        text: reportText.trim(),
+        read: false,
+        cancelled: false,
+        timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+        createdByClientTime: new Date().toISOString(),
+        createdBy: `committee_${selectedCommittee}`
+      });
+      setReportText('');
+      alert('تم إرسال البلاغ بنجاح / Report sent successfully');
+    } catch (err) {
+      console.error(err);
+      alert('فشل إرسال البلاغ / Failed to send report');
+    }
+  };
 
-            // تسجيل طالب غائب أو متأخر: نستخدم مستند لكل لجنة في مجموعة "committees"
-            const addAbsentStudent = async () => {
-                if (!studentName.trim()) {
-                    alert('الرجاء إدخال اسم الطالب');
-                    return;
-                }
-                const studentObj = {
-                    id: Date.now().toString(),
-                    name: studentName.trim(),
-                    time: new Date().toLocaleString('ar-SA')
-                };
-                const docRef = db.collection('committees').doc(committeeKey);
-                try {
-                    await docRef.set({
-                        absent: firebase.firestore.FieldValue.arrayUnion(studentObj)
-                    }, { merge: true });
+  // Cancel report (by sender)
+  const cancelReport = async (id) => {
+    if (!confirm('هل تريد إلغاء هذا البلاغ؟ / Cancel this report?')) return;
+    try {
+      await db.collection('reports').doc(id).update({
+        cancelled: true,
+        cancelledAt: new Date().toISOString()
+      });
+      alert('تم إلغاء البلاغ / Report cancelled');
+    } catch(err){
+      console.error(err);
+      alert('فشل إلغاء البلاغ / Failed to cancel report');
+    }
+  };
 
-                    // إضافة بلاغ تلقائي
-                    await db.collection('reports').add({
-                        committee: selectedCommittee,
-                        text: `تسجيل طالب غائب: ${studentObj.name}`,
-                        read: false,
-                        timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-                        createdByClientTime: new Date().toLocaleString('ar-SA')
-                    });
+  // Mark as read
+  const markAsRead = async (id) => {
+    try {
+      await db.collection('reports').doc(id).update({ read: true, readAt: new Date().toISOString() });
+    } catch(err){ console.error(err); }
+  };
 
-                    setStudentName('');
-                    alert('تم تسجيل الطالب غائبًا');
-                } catch (err) {
-                    console.error('خطأ في إضافة طالب غائب:', err);
-                    alert('فشل التسجيل. تحقق من الاتصال.');
-                }
-            };
+  // Reply to report (control sends "تم عمل اللازم" by default)
+  const replyToReport = async (id, replyText='تم عمل اللازم') => {
+    try {
+      await db.collection('reports').doc(id).update({
+        reply: replyText,
+        replyAt: new Date().toISOString(),
+        read: true
+      });
+      alert('تم إرسال الرد إلى المرسل / Reply sent to sender');
+    } catch(err){ console.error(err); alert('فشل إرسال الرد / Failed to send reply'); }
+  };
 
-            const addLateStudent = async () => {
-                if (!studentName.trim()) {
-                    alert('الرجاء إدخال اسم الطالب');
-                    return;
-                }
-                const studentObj = {
-                    id: Date.now().toString(),
-                    name: studentName.trim(),
-                    time: new Date().toLocaleString('ar-SA')
-                };
-                const docRef = db.collection('committees').doc(committeeKey);
-                try {
-                    await docRef.set({
-                        late: firebase.firestore.FieldValue.arrayUnion(studentObj)
-                    }, { merge: true });
+  // Delete single report (control)
+  const deleteReport = async (id) => {
+    if (!confirm('هل تريد حذف هذا البلاغ نهائياً؟ / Delete this report permanently?')) return;
+    try {
+      await db.collection('reports').doc(id).delete();
+      alert('تم حذف البلاغ / Report deleted');
+    } catch(err){ console.error(err); alert('فشل الحذف / Delete failed'); }
+  };
 
-                    await db.collection('reports').add({
-                        committee: selectedCommittee,
-                        text: `تسجيل طالب متأخر: ${studentObj.name}`,
-                        read: false,
-                        timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-                        createdByClientTime: new Date().toLocaleString('ar-SA')
-                    });
+  // Clear all reports (control)
+  const clearAllReports = async () => {
+    if (!confirm('سيتم حذف كل البلاغات نهائياً. هل أنت متأكد؟ / This will delete ALL reports permanently. Are you sure?')) return;
+    try {
+      const snap = await db.collection('reports').get();
+      const batch = db.batch();
+      snap.forEach(d => batch.delete(d.ref));
+      await batch.commit();
+      alert('تم حذف كل البلاغات / All reports deleted');
+    } catch(err){ console.error(err); alert('فشل الحذف / Delete failed'); }
+  };
 
-                    setStudentName('');
-                    alert('تم تسجيل الطالب متأخرًا');
-                } catch (err) {
-                    console.error('خطأ في إضافة طالب متأخر:', err);
-                    alert('فشل التسجيل. تحقق من الاتصال.');
-                }
-            };
+  // Add multiple absent students
+  const addAbsentStudents = async () => {
+    const raw = studentsInput.trim();
+    if (!raw){ alert('الرجاء إدخال اسم طالب واحد على الأقل / Please enter at least one student name'); return; }
+    const names = raw.split(/\r?\n|,/).map(s => s.trim()).filter(Boolean);
+    if (names.length === 0){ alert('لا توجد أسماء صحيحة / No valid names found'); return; }
+    try {
+      const docRef = db.collection('committees').doc(key);
+      const now = new Date().toISOString();
+      for (const name of names){
+        const stud = { id: `${Date.now()}_${Math.random().toString(36).slice(2,7)}`, name, time: now };
+        await docRef.set({ absent: firebase.firestore.FieldValue.arrayUnion(stud) }, { merge: true });
+        // Create a report for each student - notification after 10 minutes
+        setTimeout(async () => {
+          await db.collection('reports').add({
+            committee: selectedCommittee,
+            text: `إشعار غياب الطالب: ${stud.name}`,
+            read: false,
+            cancelled: false,
+            timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+            createdByClientTime: new Date().toISOString(),
+            createdBy: `committee_${selectedCommittee}`
+          });
+        }, 10 * 60 * 1000);
+      }
+      setStudentsInput('');
+      alert(`تم تسجيل ${names.length} طالب/طالبة كـ غائب(ين) / ${names.length} student(s) marked as absent`);
+    } catch(err){ console.error(err); alert('فشل التسجيل / Registration failed'); }
+  };
 
-            // نقل طالب من متأخر إلى حاضر (نزيله من مصفوفة "late" ونضيفه إلى "present")
-            const markLateStudentPresent = async (student) => {
-                const docRef = db.collection('committees').doc(committeeKey);
-                try {
-                    // إزالة من late
-                    await docRef.update({
-                        late: firebase.firestore.FieldValue.arrayRemove(student)
-                    });
-                    // إضافة إلى present (نضيف حقل arrivalTime)
-                    const presentObj = { ...student, arrivalTime: new Date().toLocaleString('ar-SA') };
-                    await docRef.update({
-                        present: firebase.firestore.FieldValue.arrayUnion(presentObj)
-                    });
+  // Mark absent -> present (move from absent array to present array)
+  const markPresent = async (committeeIndex, student) => {
+    const docRef = db.collection('committees').doc(`committee_${committeeIndex}`);
+    try {
+      await docRef.update({ absent: firebase.firestore.FieldValue.arrayRemove(student) });
+      const presentObj = { ...student, presentAt: new Date().toISOString() };
+      await docRef.update({ present: firebase.firestore.FieldValue.arrayUnion(presentObj) });
+      // create system report
+      await db.collection('reports').add({
+        committee: committeeIndex,
+        text: `تحويل حالة إلى حضور: ${student.name}`,
+        read: false,
+        cancelled: false,
+        timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+        createdByClientTime: new Date().toISOString(),
+        createdBy: 'system'
+      });
+      alert('تم تغيير الحالة إلى حاضر / Status changed to present');
+    } catch(err){ console.error(err); alert('فشل تحويل الحالة / Failed to change status'); }
+  };
 
-                    // بلاغ تلقائي
-                    await db.collection('reports').add({
-                        committee: selectedCommittee,
-                        text: `حضر الطالب المتأخر: ${student.name}`,
-                        read: false,
-                        timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-                        createdByClientTime: new Date().toLocaleString('ar-SA')
-                    });
+  // Clear attendance for all committees (absent & present)
+  const clearAttendance = async () => {
+    if (!confirm('سيتم مسح جميع سجلات الحضور والغياب من كل اللجان. هل أنت متأكد؟ / This will clear all attendance records. Are you sure?')) return;
+    try {
+      for (let i=1;i<=16;i++){
+        const docRef = db.collection('committees').doc(`committee_${i}`);
+        await docRef.set({ absent: [], present: [] }, { merge: true });
+      }
+      alert('تم مسح جميع سجلات الحضور والغياب / All attendance records cleared');
+    } catch(err){ console.error(err); alert('فشل المسح / Clear failed'); }
+  };
 
-                    setPlaySound(true);
-                } catch (err) {
-                    console.error('خطأ عند تحويل الطالب إلى حاضر:', err);
-                    alert('فشل العملية. حاول مرة أخرى.');
-                }
-            };
+  // Toggle control enabled, with password 50405040 for enabling
+  const toggleControlEnabled = async () => {
+    try {
+      // If currently disabled and trying to enable -> ask for pass
+      if (!settings.controlEnabled){
+        const pass = prompt('الرجاء إدخال الرقم السري لتفعيل شاشة التحكم: / Enter password to enable control room:');
+        if (pass !== '50405040'){
+          alert('الرقم السري غير صحيح / Incorrect password');
+          return;
+        }
+      }
+      const newVal = !settings.controlEnabled;
+      await db.collection('settings').doc('app').set({ controlEnabled: newVal }, { merge: true });
+    } catch(err){ console.error(err); alert('فشل تغيير حالة شاشة التحكم / Failed to change control status'); }
+  };
 
-            // وضع علامة "مقروء" على بلاغ
-            const markAsRead = async (reportId) => {
-                try {
-                    await db.collection('reports').doc(reportId).update({ read: true });
-                } catch (err) {
-                    console.error('خطأ عند وسم البلاغ كمقروء:', err);
-                }
-            };
+  // Try switching to control mode: ask for password if disabled
+  const tryEnterControl = async () => {
+    if (!settings.controlEnabled){
+      const pass = prompt('غرفة التحكم معطلة حالياً. الرجاء إدخال كلمة المرور لتفعيلها والدخول:\nControl room is currently disabled. Enter password to enable and access:');
+      if (!pass){
+        alert('تم الإلغاء / Cancelled');
+        return;
+      }
+      if (pass !== '50405040'){
+        alert('الرقم السري غير صحيح / Incorrect password');
+        return;
+      }
+      try {
+        await db.collection('settings').doc('app').set({ controlEnabled: true }, { merge: true });
+        setMode('control');
+        alert('تم تفعيل غرفة التحكم بنجاح / Control room enabled successfully');
+      } catch(err){
+        console.error(err);
+        alert('فشل تفعيل غرفة التحكم / Failed to enable control room');
+      }
+    } else {
+      setMode('control');
+    }
+  };
 
-            // الحصول على عدد البلاغات غير المقروءة
-            const unreadCount = reports.filter(r => !r.read).length;
+  // Computed
+  const unreadCount = reports.filter(r => !r.read && !r.cancelled).length;
 
-            return (
-                <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-2 sm:p-4">
-                    <div className="max-w-6xl mx-auto">
-                        <div className="bg-white rounded-lg shadow-lg p-3 sm:p-6 mb-4 sm:mb-6">
-                            <h1 className="text-xl sm:text-3xl font-bold text-center text-gray-800 mb-2 sm:mb-4">
-                                نظام إدارة الامتحانات الإلكتروني
-                            </h1>
-                            <p className="text-center text-gray-600 mb-3 sm:mb-4 text-xs sm:text-sm">
-                                📅 التاريخ: {new Date().toLocaleDateString('ar-SA')} | 
-                                ⚠️ يتم حفظ البيانات على السحابة (Firebase) وتظهر لجميع الأجهزة فورًا
-                            </p>
-                            <div className="flex flex-col sm:flex-row gap-2 sm:gap-4 justify-center">
-                                <button
-                                    onClick={() => setMode('committee')}
-                                    className={`w-full sm:w-auto px-4 sm:px-6 py-2 sm:py-3 rounded-lg font-semibold transition text-sm sm:text-base ${
-                                        mode === 'committee'
-                                            ? 'bg-blue-600 text-white'
-                                            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                                    }`}
-                                >
-                                    واجهة اللجنة
-                                </button>
-                                <button
-                                    onClick={() => setMode('control')}
-                                    className={`w-full sm:w-auto px-4 sm:px-6 py-2 sm:py-3 rounded-lg font-semibold transition text-sm sm:text-base ${
-                                        mode === 'control'
-                                            ? 'bg-blue-600 text-white'
-                                            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                                    }`}
-                                >
-                                    غرفة التحكم
-                                </button>
-                            </div>
+  /* ============================
+     Render
+     ============================ */
+  return (
+    <div className="min-h-screen p-3 sm:p-6">
+      <div className="max-w-6xl mx-auto">
+        {/* Header */}
+        <header className="bg-white rounded-lg shadow p-4 mb-4">
+          <h1 className="text-3xl font-bold text-center mb-2">إدارة الامتحانات / Exam Management System</h1>
+          <div className="flex flex-col sm:flex-row justify-between items-center gap-3">
+            <div className="text-center sm:text-right">
+              <div className="text-2xl font-semibold">مدرسة المليحة الحلقة الثانية والثالثة للبنين</div>
+              <div className="text-sm text-gray-600">School: Al-Maliha Boys – Second & Third Cycle</div>
+            </div>
+            <div className="text-left">
+              <div className="text-sm">📅 التاريخ الميلادي: <strong>{new Date().toISOString().slice(0,10)}</strong></div>
+              <div className="text-xs text-gray-500">Server-synced via Firebase</div>
+            </div>
+          </div>
+
+          <div className="mt-3 flex gap-2 justify-center">
+            <button onClick={() => setMode('committee')} className={`px-4 py-2 rounded ${mode==='committee' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>واجهة اللجنة / Committee</button>
+            <button onClick={tryEnterControl} className={`px-4 py-2 rounded ${mode==='control' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>غرفة التحكم / Control Room</button>
+          </div>
+        </header>
+
+        {/* Body */}
+        {mode === 'committee' ? (
+          <div className="space-y-4">
+            <div className="bg-white rounded-lg shadow p-4">
+              <label className="block font-semibold mb-2">اختر رقم اللجنة / Select Committee:</label>
+              <select value={selectedCommittee} onChange={e=>setSelectedCommittee(Number(e.target.value))} className="w-full p-2 border rounded">
+                {[...Array(16)].map((_,i)=><option key={i+1} value={i+1}>لجنة {i+1} / Committee {i+1}</option>)}
+              </select>
+            </div>
+
+            <div className="bg-white rounded-lg shadow p-4">
+              <h2 className="font-bold mb-2">إرسال بلاغ / Send Report</h2>
+              <textarea value={reportText} onChange={e=>setReportText(e.target.value)} placeholder="نص البلاغ هنا... / Write report here..." className="w-full p-2 border rounded h-28 mb-2"></textarea>
+              <div className="flex gap-2">
+                <button onClick={sendReport} className="flex-1 bg-blue-600 text-white rounded py-2 font-semibold">إرسال البلاغ / Send Report <Send/></button>
+              </div>
+
+              <div className="mt-4">
+                <h3 className="font-semibold mb-2">بلاغات اللجنة (يمكن الإلغاء) / Your Committee Reports (Can Cancel)</h3>
+                {reports.filter(r => r.createdBy === `committee_${selectedCommittee}`).length === 0 ? (
+                  <p className="text-sm text-gray-500">لا توجد بلاغات مرسلة من هذه اللجنة / No reports sent from this committee</p>
+                ) : (
+                  <div className="space-y-2">
+                    {reports.filter(r => r.createdBy === `committee_${selectedCommittee}`).map(r=>(
+                      <div key={r.id} className={`p-2 rounded ${r.cancelled ? 'bg-gray-100' : 'bg-blue-50'} border`}>
+                        <div className="flex justify-between items-center">
+                          <div>
+                            <div className="text-sm font-medium">{r.text}</div>
+                            <div className="text-xs text-gray-600">{r.createdByClientTime ? r.createdByClientTime.slice(0,10) : ''}</div>
+                            {r.reply && <div className="mt-1 text-sm text-green-700">رد / Reply: {r.reply}</div>}
+                            {r.cancelled && <div className="mt-1 text-sm text-red-600">تم إلغاء البلاغ / Report Cancelled</div>}
+                          </div>
+                          <div className="flex gap-2">
+                            {!r.cancelled && <button onClick={()=>cancelReport(r.id)} className="px-3 py-1 rounded bg-red-500 text-white text-sm flex items-center gap-1"><Cancel/> إلغاء / Cancel</button>}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="bg-white rounded-lg shadow p-4">
+              <h2 className="font-bold mb-2">تسجيل الطلبة غائبين (عدة أسماء مرة واحدة) / Register Absent Students (Multiple Names)</h2>
+              <p className="text-sm text-gray-600 mb-2">أدخل الأسماء مفصولة بسطر جديد أو بفاصلة. سيتم إرسال إشعار الغياب بعد 10 دقائق. / Enter names separated by newline or comma. Absence notification will be sent after 10 minutes.</p>
+              <textarea value={studentsInput} onChange={e=>setStudentsInput(e.target.value)} placeholder="أحمد محمد
+علي عمر, خالد سعيد" className="w-full p-2 border rounded h-28 mb-2"></textarea>
+              <div className="flex gap-2">
+                <button onClick={addAbsentStudents} className="flex-1 bg-red-600 text-white rounded py-2 font-semibold">تسجيل غائب / Mark Absent</button>
+                <button onClick={()=>setStudentsInput('')} className="flex-1 bg-gray-200 rounded py-2">مسح الحقل / Clear Field</button>
+              </div>
+
+              <div className="mt-4">
+                <h3 className="font-semibold mb-2">قائمة الغياب الحالية / Current Absentees (لجنة / Committee {selectedCommittee})</h3>
+                {(committeeDoc.absent || []).length === 0 ? (
+                  <p className="text-sm text-gray-500">لا يوجد غياب مسجل / No absences recorded</p>
+                ) : (
+                  <div className="space-y-2">
+                    {(committeeDoc.absent || []).map(s=>(
+                      <div key={s.id} className="flex justify-between items-center p-2 bg-red-50 rounded">
+                        <div>
+                          <div className="font-medium">{s.name}</div>
+                          <div className="text-xs text-gray-600">{s.time ? s.time.slice(0,10) : ''}</div>
+                        </div>
+                        <div className="flex gap-2">
+                          <button onClick={()=>markPresent(selectedCommittee, s)} className="px-3 py-1 rounded bg-green-600 text-white text-sm flex items-center gap-1"><Check/> حضر / Present</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <footer className="text-center text-sm text-gray-600">تصميم المعلم رسمي الخوالدة / Designed by Teacher Rasmi Khawaldeh</footer>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="bg-white rounded-lg shadow p-4 flex justify-between items-center">
+              <div>
+                <h2 className="font-bold text-xl flex items-center gap-2"><Bell/> غرفة التحكم / Control Room</h2>
+                <p className="text-sm text-gray-600">يمكن الرد على البلاغ أو حذفه أو مسح الكل أو مسح نتائج الحضور/الغياب. / You can reply to reports, delete them, clear all, or clear attendance records.</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="text-sm">شاشة التحكم مفعّلة؟ / Control Enabled?</div>
+                <button onClick={toggleControlEnabled} className={`px-3 py-1 rounded ${settings.controlEnabled ? 'bg-green-600 text-white' : 'bg-gray-300'}`}>
+                  {settings.controlEnabled ? 'مفعل / Enabled' : 'معطّل / Disabled'}
+                </button>
+
+                <button onClick={clearAllReports} className="px-3 py-1 rounded bg-red-500 text-white flex items-center gap-1"><Trash/> مسح الكل / Clear All</button>
+                <button onClick={clearAttendance} className="px-3 py-1 rounded bg-orange-500 text-white flex items-center gap-1">🧹 مسح الحضور والغياب / Clear Attendance</button>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-lg shadow p-4">
+              <div className="flex justify-between items-center mb-3">
+                <h3 className="font-bold">البلاغات الواردة / Incoming Reports</h3>
+                <div className="text-sm text-gray-600">{unreadCount} جديد / new</div>
+              </div>
+
+              {reports.length === 0 ? (
+                <p className="text-center text-gray-500">لا توجد بلاغات / No reports available</p>
+              ) : (
+                <div className="space-y-2">
+                  {reports.map(r=>(
+                    <div key={r.id} className={`p-3 rounded border ${r.cancelled ? 'bg-gray-100 border-gray-300' : (!r.read ? 'bg-blue-50 border-blue-400' : 'bg-white border-gray-200')}`}>
+                      <div className="flex justify-between items-start gap-2">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="bg-blue-600 text-white px-2 rounded text-xs">لجنة {r.committee} / Committee {r.committee}</span>
+                            <span className="text-xs text-gray-600">{r.createdByClientTime ? r.createdByClientTime.slice(0,19).replace('T',' ') : ''}</span>
+                            {r.cancelled && <span className="text-red-600 text-xs"> (ملغي / Cancelled)</span>}
+                          </div>
+                          <div className="text-sm mb-2 whitespace-pre-wrap">{r.text}</div>
+                          {r.reply && <div className="text-sm text-green-700">رد سابق / Previous Reply: {r.reply} — {r.replyAt ? r.replyAt.slice(0,19).replace('T',' ') : ''}</div>}
                         </div>
 
-                        {mode === 'committee' ? (
-                            <div className="space-y-4 sm:space-y-6">
-                                <div className="bg-white rounded-lg shadow-md p-4 sm:p-6">
-                                    <label className="block text-base sm:text-lg font-semibold mb-2 sm:mb-3 text-gray-700">
-                                        اختر رقم اللجنة:
-                                    </label>
-                                    <select 
-                                        value={selectedCommittee}
-                                        onChange={(e) => setSelectedCommittee(Number(e.target.value))}
-                                        className="w-full p-2 sm:p-3 border-2 border-blue-300 rounded-lg text-base sm:text-lg focus:outline-none focus:border-blue-500"
-                                    >
-                                        {[...Array(15)].map((_, i) => (
-                                            <option key={i + 1} value={i + 1}>لجنة {i + 1}</option>
-                                        ))}
-                                    </select>
-                                </div>
-
-                                <div className="bg-white rounded-lg shadow-md p-4 sm:p-6">
-                                    <h3 className="text-lg sm:text-xl font-bold mb-3 sm:mb-4 text-gray-800 flex items-center gap-2">
-                                        <Send />
-                                        إرسال بلاغ
-                                    </h3>
-                                    <textarea
-                                        value={reportText}
-                                        onChange={(e) => setReportText(e.target.value)}
-                                        placeholder="اكتب تفاصيل البلاغ هنا..."
-                                        className="w-full p-2 sm:p-3 border-2 border-gray-300 rounded-lg mb-3 h-24 sm:h-32 focus:outline-none focus:border-blue-500 resize-y text-sm sm:text-base"
-                                    />
-                                    <button
-                                        onClick={sendReport}
-                                        className="w-full bg-blue-600 text-white py-2 sm:py-3 rounded-lg font-semibold hover:bg-blue-700 transition flex items-center justify-center gap-2 text-sm sm:text-base"
-                                    >
-                                        <Send />
-                                        إرسال البلاغ
-                                    </button>
-                                </div>
-
-                                <div className="bg-white rounded-lg shadow-md p-4 sm:p-6">
-                                    <h3 className="text-lg sm:text-xl font-bold mb-3 sm:mb-4 text-gray-800 flex items-center gap-2">
-                                        <Users />
-                                        تسجيل الطلبة
-                                    </h3>
-                                    <input
-                                        type="text"
-                                        value={studentName}
-                                        onChange={(e) => setStudentName(e.target.value)}
-                                        placeholder="اسم الطالب"
-                                        className="w-full p-2 sm:p-3 border-2 border-gray-300 rounded-lg mb-3 focus:outline-none focus:border-green-500 text-sm sm:text-base"
-                                    />
-                                    <div className="flex gap-2 sm:gap-3">
-                                        <button
-                                            onClick={addAbsentStudent}
-                                            className="flex-1 bg-red-600 text-white py-2 sm:py-3 rounded-lg font-semibold hover:bg-red-700 transition text-sm sm:text-base"
-                                        >
-                                            غائب
-                                        </button>
-                                        <button
-                                            onClick={addLateStudent}
-                                            className="flex-1 bg-yellow-600 text-white py-2 sm:py-3 rounded-lg font-semibold hover:bg-yellow-700 transition text-sm sm:text-base"
-                                        >
-                                            متأخر
-                                        </button>
-                                    </div>
-                                </div>
-
-                                {committeeStudents.late && committeeStudents.late.length > 0 && (
-                                    <div className="bg-white rounded-lg shadow-md p-4 sm:p-6">
-                                        <h3 className="text-lg sm:text-xl font-bold mb-3 sm:mb-4 text-gray-800 flex items-center gap-2">
-                                            <Clock />
-                                            الطلبة المتأخرين
-                                        </h3>
-                                        {committeeStudents.late.map(student => (
-                                            <div key={student.id} className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-2 sm:p-3 bg-yellow-50 rounded-lg mb-2 gap-2">
-                                                <div className="w-full sm:w-auto">
-                                                    <p className="font-semibold text-sm sm:text-base">{student.name}</p>
-                                                    <p className="text-xs sm:text-sm text-gray-600">{student.time}</p>
-                                                </div>
-                                                <button
-                                                    onClick={() => markLateStudentPresent(student)}
-                                                    className="w-full sm:w-auto bg-green-600 text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg hover:bg-green-700 transition flex items-center justify-center gap-2 text-sm sm:text-base"
-                                                >
-                                                    <CheckCircle />
-                                                    حضر
-                                                </button>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-
-                                <div className="grid grid-cols-3 gap-2 sm:gap-4">
-                                    <div className="bg-red-100 p-3 sm:p-4 rounded-lg text-center">
-                                        <p className="text-2xl sm:text-3xl font-bold text-red-700">{(committeeStudents.absent || []).length}</p>
-                                        <p className="text-xs sm:text-sm text-red-600">غائب</p>
-                                    </div>
-                                    <div className="bg-yellow-100 p-3 sm:p-4 rounded-lg text-center">
-                                        <p className="text-2xl sm:text-3xl font-bold text-yellow-700">{(committeeStudents.late || []).length}</p>
-                                        <p className="text-xs sm:text-sm text-yellow-600">متأخر</p>
-                                    </div>
-                                    <div className="bg-green-100 p-3 sm:p-4 rounded-lg text-center">
-                                        <p className="text-2xl sm:text-3xl font-bold text-green-700">{(committeeStudents.present || []).length}</p>
-                                        <p className="text-xs sm:text-sm text-green-600">حضر</p>
-                                    </div>
-                                </div>
-                            </div>
-                        ) : (
-                            <div className="space-y-4 sm:space-y-6">
-                                <div className="bg-white rounded-lg shadow-md p-4 sm:p-6">
-                                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-4 sm:mb-6 gap-2">
-                                        <h3 className="text-xl sm:text-2xl font-bold text-gray-800 flex items-center gap-2">
-                                            <Bell />
-                                            البلاغات الواردة
-                                        </h3>
-                                        <div className="flex items-center gap-2 flex-wrap">
-                                            {unreadCount > 0 && (
-                                                <span className="bg-red-600 text-white px-3 sm:px-4 py-1 sm:py-2 rounded-full font-bold animate-pulse text-xs sm:text-base">
-                                                    {unreadCount} جديد
-                                                </span>
-                                            )}
-                                            {playSound && (
-                                                <span className="bg-green-600 text-white px-3 sm:px-4 py-1 sm:py-2 rounded-full font-bold animate-pulse text-xs sm:text-base">
-                                                    🔊 صوت التنبيه نشط
-                                                </span>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    {reports.length === 0 ? (
-                                        <p className="text-center text-gray-500 py-6 sm:py-8 text-sm sm:text-base">لا توجد بلاغات</p>
-                                    ) : (
-                                        <div className="space-y-2 sm:space-y-3">
-                                            {reports.map(report => (
-                                                <div 
-                                                    key={report.id}
-                                                    className={`p-3 sm:p-4 rounded-lg border-r-4 cursor-pointer ${
-                                                        report.read 
-                                                            ? 'bg-gray-50 border-gray-400' 
-                                                            : 'bg-blue-50 border-blue-600'
-                                                    }`}
-                                                    onClick={() => markAsRead(report.id)}
-                                                >
-                                                    <div className="flex flex-col sm:flex-row items-start sm:items-start justify-between mb-2 gap-1 sm:gap-0">
-                                                        <div className="flex items-center gap-2">
-                                                            <span className="bg-blue-600 text-white px-2 sm:px-3 py-0.5 sm:py-1 rounded-full text-xs sm:text-sm font-bold">
-                                                                لجنة {report.committee}
-                                                            </span>
-                                                            {!report.read && <AlertCircle />}
-                                                        </div>
-                                                        <span className="text-xs sm:text-sm text-gray-600">{report.createdByClientTime || ''}</span>
-                                                    </div>
-                                                    <p className="text-gray-800 font-medium whitespace-pre-wrap text-sm sm:text-base">{report.text}</p>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
-
-                                <div className="bg-white rounded-lg shadow-md p-4 sm:p-6">
-                                    <h3 className="text-lg sm:text-xl font-bold mb-3 sm:mb-4 text-gray-800">ملخص جميع اللجان</h3>
-                                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 gap-2 sm:gap-4">
-                                        {[...Array(15)].map((_, i) => {
-                                            const key2 = `committee_${i + 1}`;
-                                            const data = studentsMap[key2] || { absent: [], late: [], present: [] };
-                                            return (
-                                                <div key={i} className="border-2 border-gray-200 rounded-lg p-2 sm:p-4">
-                                                    <h4 className="font-bold text-center mb-2 sm:mb-3 text-blue-600 text-sm sm:text-base">لجنة {i + 1}</h4>
-                                                    <div className="space-y-1 sm:space-y-2 text-xs sm:text-sm">
-                                                        <div className="flex justify-between">
-                                                            <span>غائب:</span>
-                                                            <span className="font-bold text-red-600">{(data.absent || []).length}</span>
-                                                        </div>
-                                                        <div className="flex justify-between">
-                                                            <span>متأخر:</span>
-                                                            <span className="font-bold text-yellow-600">{(data.late || []).length}</span>
-                                                        </div>
-                                                        <div className="flex justify-between">
-                                                            <span>حضر:</span>
-                                                            <span className="font-bold text-green-600">{(data.present || []).length}</span>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                </div>
-                            </div>
-                        )}
+                        <div className="flex flex-col gap-2">
+                          {!r.cancelled && (
+                            <>
+                              <button onClick={()=>{ markAsRead(r.id); replyToReport(r.id, 'تم عمل اللازم'); }} className="px-3 py-1 rounded bg-green-600 text-white text-sm flex items-center gap-1"><Reply/> تم عمل اللازم / Done</button>
+                              <button onClick={()=>markAsRead(r.id)} className="px-3 py-1 rounded bg-blue-500 text-white text-sm flex items-center gap-1"><Check/> قراءة / Read</button>
+                            </>
+                          )}
+                          <button onClick={()=>deleteReport(r.id)} className="px-3 py-1 rounded bg-red-500 text-white text-sm flex items-center gap-1"><Trash/> حذف / Delete</button>
+                        </div>
+                      </div>
                     </div>
+                  ))}
                 </div>
-            );
-        };
+              )}
+            </div>
 
-        ReactDOM.render(<ExamManagementSystem />, document.getElementById('root'));
-    </script>
+            <div className="bg-white rounded-lg shadow p-4">
+              <h3 className="font-bold mb-3">جميع اللجان: حضور وغياب / All Committees: Attendance Overview</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {[...Array(16)].map((_,i)=>{
+                  const k = `committee_${i+1}`;
+                  const c = committeesData[k] || { absent: [], present: [] };
+                  return (
+                    <div key={k} className="border rounded p-3">
+                      <div className="font-semibold mb-2">لجنة {i+1} / Committee {i+1}</div>
+                      <div className="text-sm">
+                        <div className="flex justify-between"><span>غائب / Absent:</span><span className="text-red-600 font-semibold">{(c.absent || []).length}</span></div>
+                        <div className="flex justify-between"><span>حاضر / Present:</span><span className="text-green-600 font-semibold">{(c.present || []).length}</span></div>
+                      </div>
+                      {(c.absent || []).length > 0 && (
+                        <div className="mt-2 text-xs">
+                          <div className="font-semibold">الغائبين / Absentees:</div>
+                          <ul className="list-disc list-inside">
+                            {c.absent.map(s=><li key={s.id}>{s.name}</li>)}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <footer className="text-center text-sm text-gray-600">تصميم المعلم رسمي الخوالدة / Designed by Teacher Rasmi Khawaldeh</footer>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.render(<App />, document.getElementById('root'));
+</script>
 </body>
 </html>
