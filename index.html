@@ -64,22 +64,20 @@ function App(){
   const [studentsInput, setStudentsInput] = useState('');
   const [reports, setReports] = useState([]);
   const [committeesData, setCommitteesData] = useState({});
-  const [settings, setSettings] = useState({ controlEnabled: false });
+  const [controlEnabled, setControlEnabled] = useState(() => {
+    const stored = localStorage.getItem('controlEnabled');
+    return stored === 'true';
+  });
+  const [currentDate, setCurrentDate] = useState(new Date().toISOString().slice(0,10));
   const [playSound, setPlaySound] = useState(false);
   const audioCtxRef = useRef(null);
 
-  // Load settings
+  // Update date every minute
   useEffect(() => {
-    const docRef = db.collection('settings').doc('app');
-    const unsub = docRef.onSnapshot(doc => {
-      if (doc.exists){
-        setSettings(doc.data());
-      } else {
-        docRef.set({ controlEnabled: false }).catch(()=>{});
-        setSettings({ controlEnabled: false });
-      }
-    }, err => console.error(err));
-    return () => unsub();
+    const interval = setInterval(() => {
+      setCurrentDate(new Date().toISOString().slice(0,10));
+    }, 60000);
+    return () => clearInterval(interval);
   }, []);
 
   // Listen to reports
@@ -109,12 +107,12 @@ function App(){
   // Play sound when new unread reports and in control mode and control enabled
   useEffect(() => {
     const unread = reports.filter(r => !r.read && !r.cancelled).length;
-    if (unread > 0 && mode === 'control' && settings.controlEnabled){
+    if (unread > 0 && mode === 'control' && controlEnabled){
       setPlaySound(true);
     } else {
       setPlaySound(false);
     }
-  }, [reports, mode, settings]);
+  }, [reports, mode, controlEnabled]);
 
   // WebAudio beep
   useEffect(() => {
@@ -293,25 +291,25 @@ function App(){
     } catch(err){ console.error(err); alert('فشل المسح / Clear failed'); }
   };
 
-  // Toggle control enabled, with password 50405040 for enabling
-  const toggleControlEnabled = async () => {
+  // Toggle control enabled, with password 50405040 for enabling (local only)
+  const toggleControlEnabled = () => {
     try {
-      // If currently disabled and trying to enable -> ask for pass
-      if (!settings.controlEnabled){
+      if (!controlEnabled){
         const pass = prompt('الرجاء إدخال الرقم السري لتفعيل شاشة التحكم: / Enter password to enable control room:');
         if (pass !== '50405040'){
           alert('الرقم السري غير صحيح / Incorrect password');
           return;
         }
       }
-      const newVal = !settings.controlEnabled;
-      await db.collection('settings').doc('app').set({ controlEnabled: newVal }, { merge: true });
+      const newVal = !controlEnabled;
+      setControlEnabled(newVal);
+      localStorage.setItem('controlEnabled', newVal.toString());
     } catch(err){ console.error(err); alert('فشل تغيير حالة شاشة التحكم / Failed to change control status'); }
   };
 
-  // Try switching to control mode: ask for password if disabled
-  const tryEnterControl = async () => {
-    if (!settings.controlEnabled){
+  // Try switching to control mode: ask for password if disabled (local only)
+  const tryEnterControl = () => {
+    if (!controlEnabled){
       const pass = prompt('غرفة التحكم معطلة حالياً. الرجاء إدخال كلمة المرور لتفعيلها والدخول:\nControl room is currently disabled. Enter password to enable and access:');
       if (!pass){
         alert('تم الإلغاء / Cancelled');
@@ -321,14 +319,10 @@ function App(){
         alert('الرقم السري غير صحيح / Incorrect password');
         return;
       }
-      try {
-        await db.collection('settings').doc('app').set({ controlEnabled: true }, { merge: true });
-        setMode('control');
-        alert('تم تفعيل غرفة التحكم بنجاح / Control room enabled successfully');
-      } catch(err){
-        console.error(err);
-        alert('فشل تفعيل غرفة التحكم / Failed to enable control room');
-      }
+      setControlEnabled(true);
+      localStorage.setItem('controlEnabled', 'true');
+      setMode('control');
+      alert('تم تفعيل غرفة التحكم بنجاح على هذا الجهاز فقط / Control room enabled successfully on this device only');
     } else {
       setMode('control');
     }
@@ -352,7 +346,7 @@ function App(){
               <div className="text-sm text-gray-600">School: Al-Maliha Boys – Second & Third Cycle</div>
             </div>
             <div className="text-left">
-              <div className="text-sm">📅 التاريخ الميلادي: <strong>{new Date().toISOString().slice(0,10)}</strong></div>
+              <div className="text-sm">📅 <strong>{currentDate}</strong></div>
               <div className="text-xs text-gray-500">Server-synced via Firebase</div>
             </div>
           </div>
@@ -411,10 +405,7 @@ function App(){
               <p className="text-sm text-gray-600 mb-2">أدخل الأسماء مفصولة بسطر جديد أو بفاصلة. سيتم إرسال إشعار الغياب بعد 10 دقائق. / Enter names separated by newline or comma. Absence notification will be sent after 10 minutes.</p>
               <textarea value={studentsInput} onChange={e=>setStudentsInput(e.target.value)} placeholder="أحمد محمد
 علي عمر, خالد سعيد" className="w-full p-2 border rounded h-28 mb-2"></textarea>
-              <div className="flex gap-2">
-                <button onClick={addAbsentStudents} className="flex-1 bg-red-600 text-white rounded py-2 font-semibold">تسجيل غائب / Mark Absent</button>
-                <button onClick={()=>setStudentsInput('')} className="flex-1 bg-gray-200 rounded py-2">مسح الحقل / Clear Field</button>
-              </div>
+              <button onClick={addAbsentStudents} className="w-full bg-red-600 text-white rounded py-2 font-semibold">تسجيل غائب / Mark Absent</button>
 
               <div className="mt-4">
                 <h3 className="font-semibold mb-2">قائمة الغياب الحالية / Current Absentees (لجنة / Committee {selectedCommittee})</h3>
@@ -448,9 +439,9 @@ function App(){
                 <p className="text-sm text-gray-600">يمكن الرد على البلاغ أو حذفه أو مسح الكل أو مسح نتائج الحضور/الغياب. / You can reply to reports, delete them, clear all, or clear attendance records.</p>
               </div>
               <div className="flex items-center gap-2">
-                <div className="text-sm">شاشة التحكم مفعّلة؟ / Control Enabled?</div>
-                <button onClick={toggleControlEnabled} className={`px-3 py-1 rounded ${settings.controlEnabled ? 'bg-green-600 text-white' : 'bg-gray-300'}`}>
-                  {settings.controlEnabled ? 'مفعل / Enabled' : 'معطّل / Disabled'}
+                <div className="text-sm">شاشة التحكم مفعّلة على هذا الجهاز؟ / Control Enabled on this device?</div>
+                <button onClick={toggleControlEnabled} className={`px-3 py-1 rounded ${controlEnabled ? 'bg-green-600 text-white' : 'bg-gray-300'}`}>
+                  {controlEnabled ? 'مفعل / Enabled' : 'معطّل / Disabled'}
                 </button>
 
                 <button onClick={clearAllReports} className="px-3 py-1 rounded bg-red-500 text-white flex items-center gap-1"><Trash/> مسح الكل / Clear All</button>
