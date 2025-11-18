@@ -152,7 +152,7 @@ function App(){
   // Send a report (from committee)
   const sendReport = async () => {
     if (!reportText.trim()){
-      alert('الرجاء كتابة نص البلاغ / Please enter report text');
+      alert('الرجاء كتابة نص الرسالة / Please enter message text');
       return;
     }
     try {
@@ -166,25 +166,25 @@ function App(){
         createdBy: `committee_${selectedCommittee}`
       });
       setReportText('');
-      alert('تم إرسال البلاغ بنجاح / Report sent successfully');
+      alert('تم إرسال الرسالة بنجاح / ’Message sent successfully');
     } catch (err) {
       console.error(err);
-      alert('فشل إرسال البلاغ / Failed to send report');
+      alert('فشل إرسال الرسالة / Failed to send message');
     }
   };
 
   // Cancel report (by sender)
   const cancelReport = async (id) => {
-    if (!confirm('هل تريد إلغاء هذا البلاغ؟ / Cancel this report?')) return;
+    if (!confirm('هل تريد إلغاء هذه الرسالة ؟ / Cancel this message?')) return;
     try {
       await db.collection('reports').doc(id).update({
         cancelled: true,
         cancelledAt: new Date().toISOString()
       });
-      alert('تم إلغاء البلاغ / Report cancelled');
+      alert('تم إلغاء الرسالة / Message cancelled');
     } catch(err){
       console.error(err);
-      alert('فشل إلغاء البلاغ / Failed to cancel report');
+      alert('فشل إلغاء الرسالة / Failed to cancel message');
     }
   };
 
@@ -209,22 +209,22 @@ function App(){
 
   // Delete single report (control)
   const deleteReport = async (id) => {
-    if (!confirm('هل تريد حذف هذا البلاغ نهائياً؟ / Delete this report permanently?')) return;
+    if (!confirm('هل تريد حذف هذه الرسالة نهائياً؟ / Delete this message permanently?')) return;
     try {
       await db.collection('reports').doc(id).delete();
-      alert('تم حذف البلاغ / Report deleted');
+      alert('تم حذف الرسالة / Message deleted');
     } catch(err){ console.error(err); alert('فشل الحذف / Delete failed'); }
   };
 
   // Clear all reports (control)
   const clearAllReports = async () => {
-    if (!confirm('سيتم حذف كل البلاغات نهائياً. هل أنت متأكد؟ / This will delete ALL reports permanently. Are you sure?')) return;
+    if (!confirm('سيتم حذف كل الرسائل نهائياً. هل أنت متأكد؟ / This will delete ALL messages permanently. Are you sure?')) return;
     try {
       const snap = await db.collection('reports').get();
       const batch = db.batch();
       snap.forEach(d => batch.delete(d.ref));
       await batch.commit();
-      alert('تم حذف كل البلاغات / All reports deleted');
+      alert('تم حذف كل الرسائل / All messages deleted');
     } catch(err){ console.error(err); alert('فشل الحذف / Delete failed'); }
   };
 
@@ -368,10 +368,10 @@ function App(){
             </div>
 
             <div className="bg-white rounded-lg shadow p-4">
-              <h2 className="font-bold mb-2">إرسال بلاغ / Send Report</h2>
-              <textarea value={reportText} onChange={e=>setReportText(e.target.value)} placeholder="نص البلاغ هنا... / Write report here..." className="w-full p-2 border rounded h-28 mb-2"></textarea>
+              <h2 className="font-bold mb-2">إرسال رسالة / Send Message </h2>
+              <textarea value={reportText} onChange={e=>setReportText(e.target.value)} placeholder="نص الرسالة هنا... / Write message here..." className="w-full p-2 border rounded h-28 mb-2"></textarea>
               <div className="flex gap-2">
-                <button onClick={sendReport} className="flex-1 bg-blue-600 text-white rounded py-2 font-semibold">إرسال البلاغ / Send Report <Send/></button>
+                <button onClick={sendReport} className="flex-1 bg-blue-600 text-white rounded py-2 font-semibold">إرسال الرسالة / Send Message <Send/></button>
               </div>
 
               <div className="mt-4">
@@ -387,7 +387,7 @@ function App(){
                             <div className="text-sm font-medium">{r.text}</div>
                             <div className="text-xs text-gray-600">{r.createdByClientTime ? r.createdByClientTime.slice(0,10) : ''}</div>
                             {r.reply && <div className="mt-1 text-sm text-green-700">رد / Reply: {r.reply}</div>}
-                            {r.cancelled && <div className="mt-1 text-sm text-red-600">تم إلغاء البلاغ / Report Cancelled</div>}
+                            {r.cancelled && <div className="mt-1 text-sm text-red-600">تم إلغاء الرسالة / Message Cancelled</div>}
                           </div>
                           <div className="flex gap-2">
                             {!r.cancelled && <button onClick={()=>cancelReport(r.id)} className="px-3 py-1 rounded bg-red-500 text-white text-sm flex items-center gap-1"><Cancel/> إلغاء / Cancel</button>}
@@ -436,7 +436,7 @@ function App(){
             <div className="bg-white rounded-lg shadow p-4 flex justify-between items-center">
               <div>
                 <h2 className="font-bold text-xl flex items-center gap-2"><Bell/> غرفة التحكم / Control Room</h2>
-                <p className="text-sm text-gray-600">يمكن الرد على البلاغ أو حذفه أو مسح الكل أو مسح نتائج الحضور/الغياب. / You can reply to reports, delete them, clear all, or clear attendance records.</p>
+                <p className="text-sm text-gray-600">يمكن الرد على الرسالة أو حذفها أو مسح الكل أو مسح نتائج الحضور/الغياب. / You can reply to messages, delete them, clear all, or clear attendance records.</p>
               </div>
               <div className="flex items-center gap-2">
                 <div className="text-sm">شاشة التحكم مفعّلة على هذا الجهاز؟ / Control Enabled on this device?</div>
@@ -451,7 +451,7 @@ function App(){
 
             <div className="bg-white rounded-lg shadow p-4">
               <div className="flex justify-between items-center mb-3">
-                <h3 className="font-bold">البلاغات الواردة / Incoming Reports</h3>
+                <h3 className="font-bold">الرسائل الواردة / Incoming Messages </h3>
                 <div className="text-sm text-gray-600">{unreadCount} جديد / new</div>
               </div>
 
@@ -527,3 +527,4 @@ ReactDOM.render(<App />, document.getElementById('root'));
 </script>
 </body>
 </html>
+
